@@ -126,7 +126,8 @@ DcOptions::DcOptions(const DcOptions &other)
 , _cdnDcIds(other._cdnDcIds)
 , _publicKeys(other._publicKeys)
 , _cdnPublicKeys(other._cdnPublicKeys)
-, _immutable(other._immutable) {
+, _immutable(other._immutable)
+, _privateServer(other._privateServer) {
 }
 
 DcOptions::~DcOptions() = default;
@@ -166,6 +167,10 @@ bool DcOptions::isTestMode() const {
 void DcOptions::constructFromBuiltIn() {
 	WriteLocker lock(this);
 	_data.clear();
+	_cdnDcIds.clear();
+	_publicKeys.clear();
+	_cdnPublicKeys.clear();
+	_immutable = false;
 
 	readBuiltInPublicKeys();
 
@@ -301,6 +306,81 @@ void DcOptions::constructAddOne(
 		const bytes::vector &secret) {
 	WriteLocker lock(this);
 	applyOneGuarded(BareDcId(id), flags, ip, port, secret);
+}
+
+bool DcOptions::applyPrivateServer(const PrivateServerConfig &config) {
+	auto oldIds = base::flat_set<DcId>();
+	{
+		ReadLocker lock(this);
+		for (const auto &[id, list] : _data) {
+			oldIds.insert(id);
+		}
+	}
+
+	if (!config.enabled) {
+		constructFromBuiltIn();
+		{
+			WriteLocker lock(this);
+			_privateServer = config;
+		}
+		auto newIds = base::flat_set<DcId>();
+		{
+			ReadLocker lock(this);
+			for (const auto &[id, list] : _data) {
+				newIds.insert(id);
+			}
+		}
+		for (const auto id : oldIds) {
+			newIds.insert(id);
+		}
+		for (const auto id : newIds) {
+			_changed.fire_copy(id);
+		}
+		return true;
+	}
+
+	const auto keyUtf8 = config.publicKey.toUtf8();
+	const auto keyBytes = bytes::make_vector(bytes::make_span(keyUtf8));
+	auto key = RSAPublicKey(keyBytes);
+	if (config.address.isEmpty()
+		|| config.port < 1
+		|| config.port > 65535
+		|| !key.valid()) {
+		LOG(("MTP Error: invalid private server configuration."));
+		return false;
+	}
+
+	auto newIds = base::flat_set<DcId>();
+	{
+		WriteLocker lock(this);
+		_data.clear();
+		_cdnDcIds.clear();
+		_publicKeys.clear();
+		_cdnPublicKeys.clear();
+		_privateServer = config;
+		_immutable = true;
+
+		const auto address = config.address.toStdString();
+		const auto flags = Flag::f_static;
+		for (auto dcId = 1; dcId != 6; ++dcId) {
+			ApplyOneOption(
+				_data,
+				BareDcId(dcId),
+				flags,
+				address,
+				config.port,
+				{});
+			newIds.insert(BareDcId(dcId));
+		}
+		_publicKeys.emplace(key.fingerprint(), std::move(key));
+	}
+	for (const auto id : oldIds) {
+		newIds.insert(id);
+	}
+	for (const auto id : newIds) {
+		_changed.fire_copy(id);
+	}
+	return true;
 }
 
 bool DcOptions::applyOneGuarded(

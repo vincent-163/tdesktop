@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_controller.h"
 #include "media/audio/media_audio.h"
 #include "mtproto/mtproto_config.h"
+#include "mtproto/mtproto_dc_options.h"
 #include "mainwidget.h"
 #include "api/api_updates.h"
 #include "ui/ui_utility.h"
@@ -27,6 +28,47 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "main/main_domain.h"
 #include "main/main_session_settings.h"
+#include "core/core_settings.h"
+
+#include <QtCore/QDataStream>
+#include <QtCore/QIODevice>
+
+#include <string_view>
+
+namespace MTP {
+namespace {
+
+constexpr auto kPrivateServerKey = std::string_view("private_server_config");
+
+} // namespace
+
+PrivateServerConfig LoadPrivateServerConfig() {
+	const auto raw = Core::App().settings().readPref<QByteArray>(
+		kPrivateServerKey);
+	if (raw.isEmpty()) {
+		return {};
+	}
+	auto config = PrivateServerConfig();
+	auto stream = QDataStream(raw);
+	stream >> config.enabled >> config.address >> config.port >> config.publicKey;
+	if (stream.status() != QDataStream::Ok
+		|| config.port < 1
+		|| config.port > 65535) {
+		return {};
+	}
+	return config;
+}
+
+void SavePrivateServerConfig(const PrivateServerConfig &config) {
+	auto raw = QByteArray();
+	auto stream = QDataStream(&raw, QIODevice::WriteOnly);
+	stream << config.enabled << config.address << config.port << config.publicKey;
+	if (stream.status() == QDataStream::Ok) {
+		Core::App().settings().writePref<QByteArray>(kPrivateServerKey, raw);
+	}
+}
+
+} // namespace MTP
 
 namespace Main {
 namespace {
@@ -77,10 +119,13 @@ std::unique_ptr<MTP::Config> Account::prepareToStart(
 
 void Account::start(std::unique_ptr<MTP::Config> config) {
 	_appConfig = std::make_unique<AppConfig>(this);
-	startMtp(config
-		? std::move(config)
-		: std::make_unique<MTP::Config>(
-			Core::App().fallbackProductionConfig()));
+	if (!config) {
+		config = std::make_unique<MTP::Config>(
+			Core::App().fallbackProductionConfig());
+	}
+	config->dcOptions().applyPrivateServer(
+		MTP::LoadPrivateServerConfig());
+	startMtp(std::move(config));
 	_appConfig->start();
 	watchProxyChanges();
 	watchSessionChanges();

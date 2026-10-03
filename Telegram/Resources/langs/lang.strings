@@ -387,6 +387,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_intro_about" = "Welcome to the official Telegram Desktop app.\nIt's fast and secure.";
 "lng_start_msgs" = "Start Messaging";
 
+"lng_private_server_link" = "Private server settings";
+"lng_private_server_title" = "Private server";
+"lng_private_server_address" = "Server IP address";
+"lng_private_server_port" = "MTProto port";
+"lng_private_server_key" = "Server RSA public key (PEM)";
+"lng_private_server_clear" = "Clear";
+"lng_private_server_invalid" = "Enter a valid IP, port, and RSA public key.";
+
 "lng_intro_next" = "Next";
 "lng_intro_finish" = "Sign Up";
 "lng_intro_submit" = "Submit";

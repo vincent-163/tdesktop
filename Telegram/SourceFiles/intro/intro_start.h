@@ -33,7 +33,9 @@ public:
 
 private:
 	rpl::event_stream<> _nextButtonFocusRequests;
+	Ui::LinkButton *_privateServer = nullptr;
 
+	void showPrivateServerBox();
 };
 
 } // namespace details

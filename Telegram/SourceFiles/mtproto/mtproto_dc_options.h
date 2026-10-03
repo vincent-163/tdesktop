@@ -9,7 +9,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/bytes.h"
 
+#include <QtCore/QByteArray>
 #include <QtCore/QReadWriteLock>
+#include <QtCore/QString>
 #include <string>
 #include <vector>
 #include <map>
@@ -31,6 +33,16 @@ enum class Environment : uchar {
 	Production,
 	Test,
 };
+
+struct PrivateServerConfig {
+	bool enabled = false;
+	QString address;
+	int port = 24443;
+	QString publicKey;
+};
+
+[[nodiscard]] PrivateServerConfig LoadPrivateServerConfig();
+void SavePrivateServerConfig(const PrivateServerConfig &config);
 
 class DcOptions {
 public:
@@ -83,6 +95,7 @@ public:
 	void setFromList(const MTPVector<MTPDcOption> &options);
 	void addFromList(const MTPVector<MTPDcOption> &options);
 	void addFromOther(DcOptions &&options);
+	[[nodiscard]] bool applyPrivateServer(const PrivateServerConfig &config);
 
 	[[nodiscard]] std::vector<DcId> configEnumDcIds() const;
 
@@ -161,6 +174,7 @@ private:
 
 	// True when we have overriden options from a .tdesktop-endpoints file.
 	bool _immutable = false;
+	PrivateServerConfig _privateServer;
 
 };
 

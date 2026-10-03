@@ -12,6 +12,26 @@ This is the complete source code and the build instructions for the official [Te
 
 The source code is published under GPLv3 with OpenSSL exception, the license is available [here][license].
 
+## Self-hosted (private) server
+
+This fork can be pointed at a self-hosted MTProto server instead of the
+production Telegram datacenters.
+
+On the welcome/login screen tap **Private server settings** and enter:
+
+* the server IP address (or host name),
+* the MTProto port (the standalone Rust server defaults to `24443`),
+* the server's RSA public key in PEM form.
+
+Save to apply. Every datacenter is re-pointed at that endpoint and the
+configured key becomes the only trusted server key; **Clear** restores the
+built-in production datacenters. The configuration is re-applied on account
+start, so it also survives restarts.
+
+The server side of this pair is
+[vincent-163/telegram-server](https://github.com/vincent-163/telegram-server),
+whose `/server-key` endpoint prints exactly the PEM to paste here.
+
 ## Supported systems
 
 The latest version is available for

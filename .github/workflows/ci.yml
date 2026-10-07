@@ -88,6 +88,10 @@ jobs:
 
       - name: Telegram Desktop build.
         run: |
+          mkdir -p "$CCACHE_DIR"
+          if [ ! -w "$CCACHE_DIR" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "$CCACHE_DIR"
+          fi
           docker run --rm \
             -u "$(id -u)" \
             -v "$PWD:/usr/src/tdesktop" \

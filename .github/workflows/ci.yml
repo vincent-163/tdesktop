@@ -1,0 +1,163 @@
+name: Linux CI & Release
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Build Telegram Desktop
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+
+    env:
+      IMAGE_TAG: tdesktop:centos_env
+
+    steps:
+      - name: Checkout.
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: First set up.
+        run: |
+          sudo apt update
+          curl -sSL https://install.python-poetry.org | python3 -
+          curl -sSL https://github.com/ccache/ccache/releases/download/v4.13.6/ccache-4.13.6-linux-x86_64-glibc.tar.xz \
+            | sudo tar xJ -C /usr/local/bin --strip-components=1 ccache-4.13.6-linux-x86_64-glibc/ccache
+          echo "CCACHE_DIR=$RUNNER_TEMP/.tdesktop-cache" >> "$GITHUB_ENV"
+          cd Telegram/build/docker/centos_env
+          poetry install
+          DOCKERFILE=$(DEBUG= LTO= poetry run gen_dockerfile)
+          echo "$DOCKERFILE" > Dockerfile
+          rm -rf __pycache__
+
+      - name: Free up some disk space.
+        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6
+        with:
+          tool-cache: true
+
+      - name: Set up Docker Buildx.
+        id: setup-buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Libraries cache.
+        id: cache-libs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ runner.temp }}/.buildx-cache
+            ${{ runner.temp }}/.mount-cache
+          key: ${{ runner.OS }}-libs-${{ hashFiles('Telegram/build/docker/centos_env/**') }}
+          restore-keys: ${{ runner.OS }}-libs-
+
+      - name: Restore Docker cache mounts.
+        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723
+        with:
+          builder: ${{ steps.setup-buildx.outputs.name }}
+          cache-dir: ${{ runner.temp }}/.mount-cache
+          dockerfile: Telegram/build/docker/centos_env/Dockerfile
+          skip-extraction: ${{ steps.cache-libs.outputs.cache-hit }}
+
+      - name: Libraries.
+        uses: docker/build-push-action@v7
+        with:
+          context: Telegram/build/docker/centos_env
+          load: true
+          tags: ${{ env.IMAGE_TAG }}
+          cache-from: type=local,src=${{ runner.temp }}/.buildx-cache
+          cache-to: type=local,dest=${{ runner.temp }}/.buildx-cache-new,mode=max
+
+      - name: Move cache.
+        run: |
+          rm -rf "${{ runner.temp }}/.buildx-cache"
+          mv "${{ runner.temp }}/.buildx-cache-new" "${{ runner.temp }}/.buildx-cache"
+
+      - name: Restore Telegram Desktop cache.
+        id: cache-tdesktop
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.OS }}-tdesktop-release-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.OS }}-tdesktop-release-
+
+      - name: Telegram Desktop build.
+        run: |
+          docker run --rm \
+            -u "$(id -u)" \
+            -v "$PWD:/usr/src/tdesktop" \
+            -e CONFIG=Release \
+            -e KEEP_GOING=1 \
+            -e CCACHE_SLOPPINESS=pch_defines,time_macros \
+            "$IMAGE_TAG" \
+            env -u CCACHE_DISABLE /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
+            -D CMAKE_CONFIGURATION_TYPES=Release \
+            -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON \
+            -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
+
+      - name: Save Telegram Desktop cache.
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.cache-tdesktop.outputs.cache-primary-key }}
+
+      - name: Package.
+        run: |
+          set -euo pipefail
+          binary="$(find out -type f -name Telegram -perm -u+x | head -n 1)"
+          if [ -z "$binary" ]; then
+            echo "Telegram binary not found under out/."
+            find out -maxdepth 3 -type f | head -n 50
+            exit 1
+          fi
+          bin_dir="$(dirname "$binary")"
+          name="telegram-desktop-linux-x64-${GITHUB_SHA::8}"
+          stage="package/$name"
+          mkdir -p "$stage/TelegramForcePortable"
+          touch "$stage/TelegramForcePortable/.keep"
+          cp "$binary" "$stage/"
+          if [ -f "$bin_dir/Updater" ]; then
+            cp "$bin_dir/Updater" "$stage/"
+          fi
+          docker run --rm \
+            -u "$(id -u)" \
+            -v "$PWD/package:/package" \
+            "$IMAGE_TAG" \
+            find /package -type f -name Telegram -exec strip --strip-unneeded {} \;
+          tar -cJf "$name.tar.xz" -C package "$name"
+          mkdir -p artifacts
+          mv "$name.tar.xz" artifacts/
+          (cd artifacts && sha256sum ./*.tar.xz > SHA256SUMS.txt)
+          ls -lh artifacts
+          df -h .
+
+      - name: Upload artifact.
+        uses: actions/upload-artifact@v7
+        with:
+          name: telegram-desktop-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish release.
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="build-${GITHUB_SHA::8}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" artifacts/* --clobber
+          else
+            gh release create "$tag" artifacts/* \
+              --target "$GITHUB_SHA" \
+              --title "Telegram Desktop build ${GITHUB_SHA::8}" \
+              --notes "Automated Linux x64 build of ${GITHUB_SHA}." \
+              --latest
+          fi
